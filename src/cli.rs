@@ -2,7 +2,6 @@ use clap::Parser;
 
 pub const DEFAULT_BASE_URL: &str = "http://192.168.1.40:8787/v1";
 pub const DEFAULT_MODEL: &str = "google/gemma-4-e2b";
-pub const DEFAULT_API_KEY: &str = "";
 
 #[derive(Debug, Parser)]
 #[command(version, about = "A small mystical CLI for local pondering")]
@@ -12,16 +11,16 @@ pub struct Args {
     pub prompt: Vec<String>,
 
     /// OpenAI-compatible API base URL
-    #[arg(long, default_value = DEFAULT_BASE_URL)]
-    pub base_url: String,
+    #[arg(long)]
+    pub base_url: Option<String>,
 
     /// Model name to request
-    #[arg(long, default_value = DEFAULT_MODEL)]
-    pub model: String,
+    #[arg(long)]
+    pub model: Option<String>,
 
     /// API key for endpoints that require authorization
-    #[arg(long, default_value = DEFAULT_API_KEY)]
-    pub api_key: String,
+    #[arg(long)]
+    pub api_key: Option<String>,
 
     /// Disable the animated orb while waiting
     #[arg(long)]
@@ -30,6 +29,10 @@ pub struct Args {
     /// Disable mystical status messages while waiting
     #[arg(long)]
     pub no_mystical: bool,
+
+    /// Stream tokens as they arrive instead of showing the wait UI
+    #[arg(long)]
+    pub stream: bool,
 }
 
 impl Args {

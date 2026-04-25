@@ -1,6 +1,8 @@
 use anyhow::{Context, Result, anyhow};
+use futures_util::StreamExt;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 
 const SYSTEM_PROMPT: &str = r#"You are Ponder, a small mystical terminal oracle.
 
@@ -42,16 +44,8 @@ impl ChatClient {
             stream: false,
         };
 
-        let mut builder = self
-            .http
-            .post(format!("{}/chat/completions", self.base_url))
-            .json(&request);
-
-        if !self.api_key.is_empty() {
-            builder = builder.bearer_auth(&self.api_key);
-        }
-
-        let response = builder
+        let response = self
+            .request(&request)
             .send()
             .await
             .context("failed to reach the OpenAI-compatible endpoint")?;
@@ -74,6 +68,104 @@ impl ChatClient {
             .filter(|content| !content.is_empty())
             .ok_or_else(|| anyhow!("endpoint response did not include assistant content"))
     }
+
+    pub async fn stream_ponder<W: Write>(
+        &self,
+        model: &str,
+        prompt: &str,
+        mut output: W,
+    ) -> Result<()> {
+        let request = ChatRequest {
+            model,
+            messages: vec![
+                Message {
+                    role: "system",
+                    content: SYSTEM_PROMPT,
+                },
+                Message {
+                    role: "user",
+                    content: prompt,
+                },
+            ],
+            stream: true,
+        };
+
+        let response = self
+            .request(&request)
+            .send()
+            .await
+            .context("failed to reach the OpenAI-compatible endpoint")?;
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(http_error(status, response).await);
+        }
+
+        let mut buffer = String::new();
+        let mut chunks = response.bytes_stream();
+
+        while let Some(chunk) = chunks.next().await {
+            let chunk = chunk.context("failed while reading streaming response")?;
+            let text = String::from_utf8_lossy(&chunk);
+            buffer.push_str(&text);
+
+            while let Some(newline) = buffer.find('\n') {
+                let line = buffer[..newline].trim_end_matches('\r').to_string();
+                buffer.drain(..=newline);
+
+                if process_stream_line(&line, &mut output)? {
+                    output.flush().context("failed to flush streamed output")?;
+                    return Ok(());
+                }
+            }
+        }
+
+        if !buffer.trim().is_empty() {
+            process_stream_line(buffer.trim_end_matches('\r'), &mut output)?;
+        }
+
+        output.flush().context("failed to flush streamed output")?;
+        Ok(())
+    }
+
+    fn request<'a>(&self, request: &'a ChatRequest<'a>) -> reqwest::RequestBuilder {
+        let builder = self
+            .http
+            .post(format!("{}/chat/completions", self.base_url))
+            .json(request);
+
+        if self.api_key.is_empty() {
+            builder
+        } else {
+            builder.bearer_auth(&self.api_key)
+        }
+    }
+}
+
+fn process_stream_line<W: Write>(line: &str, output: &mut W) -> Result<bool> {
+    let Some(data) = line.strip_prefix("data:").map(str::trim) else {
+        return Ok(false);
+    };
+
+    if data == "[DONE]" {
+        return Ok(true);
+    }
+
+    if data.is_empty() {
+        return Ok(false);
+    }
+
+    let event: StreamResponse = serde_json::from_str(data)
+        .with_context(|| format!("endpoint returned an invalid stream event: {data}"))?;
+
+    for choice in event.choices {
+        if let Some(content) = choice.delta.content {
+            write!(output, "{content}").context("failed to write streamed output")?;
+            output.flush().context("failed to flush streamed output")?;
+        }
+    }
+
+    Ok(false)
 }
 
 async fn http_error(status: StatusCode, response: reqwest::Response) -> anyhow::Error {
@@ -110,5 +202,20 @@ struct Choice {
 
 #[derive(Deserialize)]
 struct AssistantMessage {
+    content: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct StreamResponse {
+    choices: Vec<StreamChoice>,
+}
+
+#[derive(Deserialize)]
+struct StreamChoice {
+    delta: StreamDelta,
+}
+
+#[derive(Deserialize)]
+struct StreamDelta {
     content: Option<String>,
 }

@@ -26,4 +26,26 @@ With another endpoint/model:
 ponder --base-url http://localhost:1234/v1 --model local-model "explain SQLite"
 ```
 
+Stream tokens as they arrive:
+
+```sh
+ponder --stream "tell me a short story about an orb"
+```
+
 The orb animation appears only in an interactive terminal. Non-interactive output stays plain.
+
+## Config
+
+Optional config lives at `~/.config/ponder/config.toml`:
+
+```toml
+base_url = "http://192.168.1.40:8787/v1"
+model = "google/gemma-4-e2b"
+# api_key = "..."
+
+[ui]
+orb = true
+mystical_messages = true
+```
+
+CLI flags override config values.
