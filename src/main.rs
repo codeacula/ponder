@@ -10,7 +10,7 @@ use cli::Args;
 use client::ChatClient;
 use config::Settings;
 use std::io::stdout;
-use ui::WaitUi;
+use ui::{WaitUi, print_answer};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
     };
     wait_ui.stop().await;
 
-    println!("{}", result?);
+    print_answer(&result?)?;
 
     Ok(())
 }
