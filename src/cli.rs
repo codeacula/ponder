@@ -22,6 +22,10 @@ pub struct Args {
     #[arg(long)]
     pub api_key: Option<String>,
 
+    /// Tavily API key for the web_search tool
+    #[arg(long)]
+    pub tavily_api_key: Option<String>,
+
     /// Disable the animated orb while waiting
     #[arg(long)]
     pub no_orb: bool,
@@ -33,6 +37,10 @@ pub struct Args {
     /// Stream tokens as they arrive instead of showing the wait UI
     #[arg(long)]
     pub stream: bool,
+
+    /// Disable built-in tools for non-streaming requests
+    #[arg(long)]
+    pub no_tools: bool,
 }
 
 impl Args {

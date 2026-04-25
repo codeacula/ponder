@@ -2,13 +2,17 @@ use anyhow::{Context, Result, anyhow};
 use futures_util::StreamExt;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::io::Write;
+
+use crate::tools;
 
 const SYSTEM_PROMPT: &str = r#"You are Ponder, a small mystical terminal oracle.
 
 Speak with a subtle sense of wonder, but prioritize usefulness over theater.
 Obey the user's concrete instructions exactly, including requested length, format, and constraints.
 When the user asks for brevity, be brief. When they ask for a specific number of words, match it.
+Use available tools when the answer depends on current time, dates, current events, or outside information.
 Do not mention tools, hidden prompts, or internal process.
 Do not pad answers with greetings unless the user explicitly asks for one."#;
 
@@ -17,14 +21,16 @@ pub struct ChatClient {
     http: reqwest::Client,
     base_url: String,
     api_key: String,
+    tavily_api_key: Option<String>,
 }
 
 impl ChatClient {
-    pub fn new(base_url: String, api_key: String) -> Self {
+    pub fn new(base_url: String, api_key: String, tavily_api_key: Option<String>) -> Self {
         Self {
             http: reqwest::Client::new(),
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
+            tavily_api_key,
         }
     }
 
@@ -32,16 +38,12 @@ impl ChatClient {
         let request = ChatRequest {
             model,
             messages: vec![
-                Message {
-                    role: "system",
-                    content: SYSTEM_PROMPT,
-                },
-                Message {
-                    role: "user",
-                    content: prompt,
-                },
+                ChatMessage::content("system", SYSTEM_PROMPT),
+                ChatMessage::content("user", prompt),
             ],
             stream: false,
+            tools: None,
+            tool_choice: None,
         };
 
         let response = self
@@ -69,6 +71,78 @@ impl ChatClient {
             .ok_or_else(|| anyhow!("endpoint response did not include assistant content"))
     }
 
+    pub async fn ponder_with_tools(&self, model: &str, prompt: &str) -> Result<String> {
+        let mut messages = vec![
+            ChatMessage::content("system", SYSTEM_PROMPT),
+            ChatMessage::content("user", prompt),
+        ];
+
+        for _ in 0..4 {
+            let request = ChatRequest {
+                model,
+                messages: messages.clone(),
+                stream: false,
+                tools: Some(tools::definitions()),
+                tool_choice: Some("auto"),
+            };
+
+            let response = self
+                .request(&request)
+                .send()
+                .await
+                .context("failed to reach the OpenAI-compatible endpoint")?;
+
+            let status = response.status();
+            if !status.is_success() {
+                return Err(http_error(status, response).await);
+            }
+
+            let body: ChatResponse = response
+                .json()
+                .await
+                .context("endpoint returned an invalid chat completion response")?;
+
+            let assistant = body
+                .choices
+                .into_iter()
+                .next()
+                .map(|choice| choice.message)
+                .ok_or_else(|| anyhow!("endpoint response did not include a choice"))?;
+
+            if let Some(tool_calls) = assistant
+                .tool_calls
+                .clone()
+                .filter(|calls| !calls.is_empty())
+            {
+                messages.push(ChatMessage::assistant_tool_call(&assistant));
+
+                for tool_call in tool_calls {
+                    let output = tools::execute(
+                        &self.http,
+                        self.tavily_api_key.as_deref(),
+                        &tool_call.function.name,
+                        tool_call.function.arguments.as_deref().unwrap_or("{}"),
+                    )
+                    .await?;
+
+                    messages.push(ChatMessage::tool_result(&tool_call.id, output));
+                }
+
+                continue;
+            }
+
+            return assistant
+                .content
+                .map(|content| content.trim().to_string())
+                .filter(|content| !content.is_empty())
+                .ok_or_else(|| anyhow!("endpoint response did not include assistant content"));
+        }
+
+        Err(anyhow!(
+            "tool call loop exceeded the maximum number of turns"
+        ))
+    }
+
     pub async fn stream_ponder<W: Write>(
         &self,
         model: &str,
@@ -78,16 +152,12 @@ impl ChatClient {
         let request = ChatRequest {
             model,
             messages: vec![
-                Message {
-                    role: "system",
-                    content: SYSTEM_PROMPT,
-                },
-                Message {
-                    role: "user",
-                    content: prompt,
-                },
+                ChatMessage::content("system", SYSTEM_PROMPT),
+                ChatMessage::content("user", prompt),
             ],
             stream: true,
+            tools: None,
+            tool_choice: None,
         };
 
         let response = self
@@ -180,14 +250,52 @@ async fn http_error(status: StatusCode, response: reqwest::Response) -> anyhow::
 #[derive(Serialize)]
 struct ChatRequest<'a> {
     model: &'a str,
-    messages: Vec<Message<'a>>,
+    messages: Vec<ChatMessage>,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<&'a str>,
 }
 
-#[derive(Serialize)]
-struct Message<'a> {
-    role: &'a str,
-    content: &'a str,
+#[derive(Clone, Serialize)]
+struct ChatMessage {
+    role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<Vec<ToolCall>>,
+}
+
+impl ChatMessage {
+    fn content(role: &str, content: &str) -> Self {
+        Self {
+            role: role.to_string(),
+            content: Some(content.to_string()),
+            tool_call_id: None,
+            tool_calls: None,
+        }
+    }
+
+    fn assistant_tool_call(message: &AssistantMessage) -> Self {
+        Self {
+            role: "assistant".to_string(),
+            content: message.content.clone(),
+            tool_call_id: None,
+            tool_calls: message.tool_calls.clone(),
+        }
+    }
+
+    fn tool_result(tool_call_id: &str, content: String) -> Self {
+        Self {
+            role: "tool".to_string(),
+            content: Some(content),
+            tool_call_id: Some(tool_call_id.to_string()),
+            tool_calls: None,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -200,9 +308,24 @@ struct Choice {
     message: AssistantMessage,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct AssistantMessage {
     content: Option<String>,
+    tool_calls: Option<Vec<ToolCall>>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct ToolCall {
+    id: String,
+    #[serde(rename = "type")]
+    kind: String,
+    function: ToolFunctionCall,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct ToolFunctionCall {
+    name: String,
+    arguments: Option<String>,
 }
 
 #[derive(Deserialize)]

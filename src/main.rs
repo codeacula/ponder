@@ -1,6 +1,7 @@
 mod cli;
 mod client;
 mod config;
+mod tools;
 mod ui;
 
 use anyhow::Result;
@@ -16,7 +17,7 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let prompt = args.prompt_text();
     let settings = Settings::load(&args)?;
-    let client = ChatClient::new(settings.base_url, settings.api_key);
+    let client = ChatClient::new(settings.base_url, settings.api_key, settings.tavily_api_key);
 
     if settings.stream {
         client
@@ -27,7 +28,11 @@ async fn main() -> Result<()> {
     }
 
     let wait_ui = WaitUi::start(settings.show_orb, settings.show_mystical);
-    let result = client.ponder(&settings.model, &prompt).await;
+    let result = if settings.tools {
+        client.ponder_with_tools(&settings.model, &prompt).await
+    } else {
+        client.ponder(&settings.model, &prompt).await
+    };
     wait_ui.stop().await;
 
     println!("{}", result?);

@@ -7,6 +7,8 @@ A small mystical CLI that sends a prompt to an OpenAI-compatible chat completion
 - Base URL: `http://192.168.1.40:8787/v1`
 - Model: `google/gemma-4-e2b`
 - API key: read from `LM_API_TOKEN`, then `OPENAI_API_KEY`, unless `--api-key` is passed
+- Built-in tools are enabled for non-streaming requests
+- Web search uses Tavily via `TAVILY_API_KEY` or `tavily_api_key` in config
 
 ## Usage
 
@@ -32,6 +34,19 @@ Stream tokens as they arrive:
 ponder --stream "tell me a short story about an orb"
 ```
 
+Disable built-in tools for non-streaming requests:
+
+```sh
+ponder --no-tools "what time is it?"
+```
+
+Ask current web-backed questions:
+
+```sh
+export TAVILY_API_KEY="..."
+ponder "search the web for the latest Rust release and summarize it"
+```
+
 The orb animation appears only in an interactive terminal. Non-interactive output stays plain.
 
 ## Config
@@ -42,6 +57,7 @@ Optional config lives at `~/.config/ponder/config.toml`:
 base_url = "http://192.168.1.40:8787/v1"
 model = "google/gemma-4-e2b"
 # api_key = "..."
+# tavily_api_key = "..."
 
 [ui]
 orb = true
