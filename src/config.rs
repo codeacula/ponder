@@ -11,7 +11,6 @@ pub struct Settings {
     pub model: String,
     pub api_key: String,
     pub tavily_api_key: Option<String>,
-    pub show_orb: bool,
     pub show_mystical: bool,
     pub stream: bool,
     pub tools: bool,
@@ -45,7 +44,6 @@ impl Settings {
                 .unwrap_or_else(|| DEFAULT_MODEL.to_string()),
             api_key,
             tavily_api_key,
-            show_orb: config.ui.as_ref().and_then(|ui| ui.orb).unwrap_or(true) && !args.no_orb,
             show_mystical: config
                 .ui
                 .as_ref()
@@ -87,7 +85,6 @@ impl FileConfig {
 
 #[derive(Debug, Deserialize)]
 struct UiConfig {
-    orb: Option<bool>,
     mystical_messages: Option<bool>,
 }
 

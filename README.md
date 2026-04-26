@@ -16,6 +16,24 @@ A small mystical CLI that sends a prompt to an OpenAI-compatible chat completion
 ponder "what should I build first?"
 ```
 
+Or start an interactive prompt to avoid shell quoting issues:
+
+```sh
+ponder
+```
+
+You can also pipe a prompt through stdin:
+
+```sh
+printf "what's the next step?" | ponder
+```
+
+Build and install the current checkout for local testing:
+
+```sh
+./scripts/install-local.sh
+```
+
 With an explicit token:
 
 ```sh
@@ -47,7 +65,7 @@ export TAVILY_API_KEY="..."
 ponder "search the web for the latest Rust release and summarize it"
 ```
 
-The orb animation appears only in an interactive terminal. Non-interactive output stays plain.
+Mystical status messages appear only in an interactive terminal. Non-interactive output stays plain.
 
 ## Config
 
@@ -60,7 +78,6 @@ model = "google/gemma-4-e2b"
 # tavily_api_key = "..."
 
 [ui]
-orb = true
 mystical_messages = true
 ```
 

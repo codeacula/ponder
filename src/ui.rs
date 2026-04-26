@@ -13,12 +13,16 @@ use tokio::{sync::watch, task::JoinHandle};
 const ORB_FRAMES: &[&str] = &["◌", "◍", "◎", "◉", "●", "◉", "◎", "◍"];
 const SPARKLES: &[&str] = &["✦", "✧", "✩", "✶", "·", "˚", " "];
 const MESSAGES: &[&str] = &[
-    "light gathers behind the glass...",
-    "blue sparks drift through the veil...",
-    "violet threads find their pattern...",
-    "pink fireflies orbit the answer...",
-    "cyan mist clears from the crystal...",
-    "the orb listens for a useful truth...",
+    "recursive thoughts spiral through the ether...",
+    "the crystal parses ancient symbols...",
+    "stardust compiles into meaning...",
+    "logic threads weave between the sparks...",
+    "the orb traces paths through infinite loops...",
+    "midnight functions call the void...",
+    "scanning the astral codex for patterns...",
+    "binary stars align in the deep...",
+    "undefined runes resolve in the swirl...",
+    "the answer surfaces from recursive depths...",
 ];
 const GRADIENT: &[Color] = &[
     Color::Rgb {
@@ -52,6 +56,7 @@ const GRADIENT: &[Color] = &[
         b: 255,
     },
 ];
+const WAIT_GRADIENT_STEPS: usize = 5;
 
 pub struct WaitUi {
     stop: Option<watch::Sender<bool>>,
@@ -59,7 +64,7 @@ pub struct WaitUi {
 }
 
 impl WaitUi {
-    pub fn start(show_orb: bool, show_mystical: bool) -> Self {
+    pub fn start(show_mystical: bool) -> Self {
         if !stdout().is_terminal() {
             return Self {
                 stop: None,
@@ -77,26 +82,12 @@ impl WaitUi {
                     break;
                 }
 
-                let orb = if show_orb {
-                    let left = SPARKLES[tick % SPARKLES.len()];
-                    let frame = ORB_FRAMES[tick % ORB_FRAMES.len()];
-                    let right = SPARKLES[(tick + 2) % SPARKLES.len()];
-                    format!("{left} {frame} {right}")
-                } else {
-                    String::new()
-                };
-
                 let message = if show_mystical {
                     MESSAGES[(tick / 10) % MESSAGES.len()]
                 } else {
                     "pondering..."
                 };
-
-                let line = if show_orb {
-                    format!("{orb}  {message}")
-                } else {
-                    message.to_string()
-                };
+                let line = decorated_wait_line(message, tick);
 
                 let _ = out
                     .queue(cursor::MoveToColumn(0))
@@ -142,40 +133,23 @@ pub fn print_answer(answer: &str) -> std::io::Result<()> {
     }
 
     let mut out = stdout();
-    let width = frame_width(answer);
-    let inner_width = width.saturating_sub(4);
-    let border = "─".repeat(width.saturating_sub(2));
+    let content_width = size()
+        .map(|(w, _)| w as usize)
+        .unwrap_or(80)
+        .saturating_sub(4)
+        .min(76);
 
-    out.queue(SetForegroundColor(GRADIENT[0]))?
-        .queue(Print(format!("╭{border}╮\n")))?;
+    out.queue(Print("\n"))?;
 
-    let title = "✦ crystal ball ✦";
-    write_centered(&mut out, title, inner_width, GRADIENT[3])?;
-
-    let orb_lines = ["     ✦     ", "   ◌ ◉ ◌   ", " ✧  ◍ ◎  ✧ ", "   ◌ ◉ ◌   "];
-    for (idx, line) in orb_lines.iter().enumerate() {
-        write_centered(
-            &mut out,
-            line,
-            inner_width,
-            GRADIENT[(idx + 1) % GRADIENT.len()],
-        )?;
+    for line in render_markdown(answer, content_width) {
+        write_answer_line(&mut out, &line)?;
     }
 
-    write_empty(&mut out, inner_width)?;
-
-    for line in render_markdown(answer, inner_width) {
-        write_answer_line(&mut out, &line, inner_width)?;
-    }
-
-    out.queue(SetForegroundColor(GRADIENT[4]))?
-        .queue(Print(format!("╰{border}╯\n")))?
-        .queue(ResetColor)?
-        .flush()
+    out.queue(Print("\n"))?.queue(ResetColor)?.flush()
 }
 
 fn write_shifted_line<W: Write>(out: &mut W, text: &str, tick: usize) -> std::io::Result<()> {
-    let color = GRADIENT[(tick / 2) % GRADIENT.len()];
+    let color = shifted_gradient_color(tick);
     out.queue(SetForegroundColor(color))?
         .queue(Print(text))?
         .queue(ResetColor)?;
@@ -183,43 +157,46 @@ fn write_shifted_line<W: Write>(out: &mut W, text: &str, tick: usize) -> std::io
     Ok(())
 }
 
-fn frame_width(answer: &str) -> usize {
-    let terminal_width = size().map(|(width, _)| width as usize).unwrap_or(80);
-    let longest_line = answer.lines().map(str::len).max().unwrap_or(0);
-    let desired = longest_line.clamp(42, 76) + 4;
+fn decorated_wait_line(message: &str, tick: usize) -> String {
+    let left = SPARKLES[tick % SPARKLES.len()];
+    let orb = ORB_FRAMES[tick % ORB_FRAMES.len()];
+    let right = SPARKLES[(tick + 2) % SPARKLES.len()];
 
-    desired.min(terminal_width.saturating_sub(2)).max(42)
+    format!("{left} {orb} {right}  {message}")
 }
 
-fn write_centered<W: Write>(
-    out: &mut W,
-    text: &str,
-    width: usize,
-    color: Color,
-) -> std::io::Result<()> {
-    let text_width = text.chars().count();
-    let left = width.saturating_sub(text_width) / 2;
-    let right = width.saturating_sub(text_width + left);
+fn shifted_gradient_color(tick: usize) -> Color {
+    let phase = tick % (GRADIENT.len() * WAIT_GRADIENT_STEPS);
+    let from = GRADIENT[phase / WAIT_GRADIENT_STEPS];
+    let to = GRADIENT[(phase / WAIT_GRADIENT_STEPS + 1) % GRADIENT.len()];
+    let step = phase % WAIT_GRADIENT_STEPS;
 
-    out.queue(SetForegroundColor(color))?
-        .queue(Print("│ "))?
-        .queue(Print(" ".repeat(left)))?
-        .queue(Print(text.bold()))?
-        .queue(Print(" ".repeat(right)))?
-        .queue(Print(" │\n"))?
-        .queue(ResetColor)?;
-
-    Ok(())
+    interpolate_color(from, to, step, WAIT_GRADIENT_STEPS)
 }
 
-fn write_empty<W: Write>(out: &mut W, width: usize) -> std::io::Result<()> {
-    out.queue(SetForegroundColor(GRADIENT[2]))?
-        .queue(Print("│ "))?
-        .queue(Print(" ".repeat(width)))?
-        .queue(Print(" │\n"))?
-        .queue(ResetColor)?;
+fn interpolate_color(from: Color, to: Color, step: usize, steps: usize) -> Color {
+    let (from_r, from_g, from_b) = rgb(from);
+    let (to_r, to_g, to_b) = rgb(to);
 
-    Ok(())
+    Color::Rgb {
+        r: interpolate_channel(from_r, to_r, step, steps),
+        g: interpolate_channel(from_g, to_g, step, steps),
+        b: interpolate_channel(from_b, to_b, step, steps),
+    }
+}
+
+fn interpolate_channel(from: u8, to: u8, step: usize, steps: usize) -> u8 {
+    let from = from as isize;
+    let to = to as isize;
+
+    (from + (to - from) * step as isize / steps as isize) as u8
+}
+
+fn rgb(color: Color) -> (u8, u8, u8) {
+    match color {
+        Color::Rgb { r, g, b } => (r, g, b),
+        _ => (255, 255, 255),
+    }
 }
 
 struct AnswerLine {
@@ -346,7 +323,11 @@ fn render_markdown(markdown: &str, width: usize) -> Vec<AnswerLine> {
             "",
             "",
             width,
-            Color::White,
+            Color::Rgb {
+                r: 210,
+                g: 210,
+                b: 240,
+            },
             false,
         );
     }
@@ -362,28 +343,21 @@ fn render_markdown(markdown: &str, width: usize) -> Vec<AnswerLine> {
     lines
 }
 
-fn write_answer_line<W: Write>(
-    out: &mut W,
-    line: &AnswerLine,
-    width: usize,
-) -> std::io::Result<()> {
-    out.queue(SetForegroundColor(GRADIENT[5]))?
-        .queue(Print("│ "))?
-        .queue(SetForegroundColor(line.color))?;
-
-    if line.bold {
-        out.queue(Print(line.text.as_str().bold()))?;
-    } else {
-        out.queue(Print(&line.text))?;
+fn write_answer_line<W: Write>(out: &mut W, line: &AnswerLine) -> std::io::Result<()> {
+    if line.text.is_empty() {
+        out.queue(Print("\n"))?;
+        return Ok(());
     }
 
-    out.queue(ResetColor)?
-        .queue(Print(
-            " ".repeat(width.saturating_sub(visible_len(&line.text))),
-        ))?
-        .queue(SetForegroundColor(GRADIENT[5]))?
-        .queue(Print(" │\n"))?;
+    out.queue(SetForegroundColor(line.color))?;
 
+    if line.bold {
+        out.queue(Print(format!("  {}\n", line.text.as_str().bold())))?;
+    } else {
+        out.queue(Print(format!("  {}\n", line.text)))?;
+    }
+
+    out.queue(ResetColor)?;
     Ok(())
 }
 

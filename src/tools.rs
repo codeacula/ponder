@@ -57,11 +57,7 @@ pub async fn execute(
     }
 }
 
-fn current_time(arguments: &str) -> Result<String> {
-    if !arguments.trim().is_empty() {
-        let _: Value = serde_json::from_str(arguments)?;
-    }
-
+fn current_time(_arguments: &str) -> Result<String> {
     let now = Local::now();
     Ok(json!({
         "local_time": now.to_rfc3339(),

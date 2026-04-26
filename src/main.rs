@@ -9,13 +9,13 @@ use clap::Parser;
 use cli::Args;
 use client::ChatClient;
 use config::Settings;
-use std::io::stdout;
+use std::io::{IsTerminal, Read, Write, stdin, stdout};
 use ui::{WaitUi, print_answer};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
-    let prompt = args.prompt_text();
+    let prompt = read_prompt(&args)?;
     let settings = Settings::load(&args)?;
     let client = ChatClient::new(settings.base_url, settings.api_key, settings.tavily_api_key);
 
@@ -27,7 +27,7 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let wait_ui = WaitUi::start(settings.show_orb, settings.show_mystical);
+    let wait_ui = WaitUi::start(settings.show_mystical);
     let result = if settings.tools {
         client.ponder_with_tools(&settings.model, &prompt).await
     } else {
@@ -38,4 +38,24 @@ async fn main() -> Result<()> {
     print_answer(&result?)?;
 
     Ok(())
+}
+
+fn read_prompt(args: &Args) -> Result<String> {
+    if let Some(prompt) = args.prompt_text() {
+        return Ok(prompt);
+    }
+
+    let mut prompt = String::new();
+    if stdin().is_terminal() {
+        print!("ponder> ");
+        stdout().flush()?;
+        stdin().read_line(&mut prompt)?;
+    } else {
+        stdin().read_to_string(&mut prompt)?;
+    }
+
+    let prompt = prompt.trim().to_string();
+    anyhow::ensure!(!prompt.is_empty(), "prompt cannot be empty");
+
+    Ok(prompt)
 }

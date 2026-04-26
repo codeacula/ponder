@@ -7,7 +7,7 @@ pub const DEFAULT_MODEL: &str = "google/gemma-4-e2b";
 #[command(version, about = "A small mystical CLI for local pondering")]
 pub struct Args {
     /// The thing to ponder
-    #[arg(required = true, trailing_var_arg = true)]
+    #[arg(trailing_var_arg = true)]
     pub prompt: Vec<String>,
 
     /// OpenAI-compatible API base URL
@@ -26,10 +26,6 @@ pub struct Args {
     #[arg(long)]
     pub tavily_api_key: Option<String>,
 
-    /// Disable the animated orb while waiting
-    #[arg(long)]
-    pub no_orb: bool,
-
     /// Disable mystical status messages while waiting
     #[arg(long)]
     pub no_mystical: bool,
@@ -44,7 +40,11 @@ pub struct Args {
 }
 
 impl Args {
-    pub fn prompt_text(&self) -> String {
-        self.prompt.join(" ")
+    pub fn prompt_text(&self) -> Option<String> {
+        if self.prompt.is_empty() {
+            return None;
+        }
+
+        Some(self.prompt.join(" "))
     }
 }

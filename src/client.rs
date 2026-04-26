@@ -7,6 +7,7 @@ use std::io::Write;
 
 use crate::tools;
 
+
 const SYSTEM_PROMPT: &str = r#"You are the voice inside a small crystal ball in the user's terminal.
 
 Speak with a subtle sense of wonder, but prioritize usefulness over theater.
@@ -39,45 +40,19 @@ impl ChatClient {
     pub async fn ponder(&self, model: &str, prompt: &str) -> Result<String> {
         let request = ChatRequest {
             model,
-            messages: vec![
-                ChatMessage::content("system", SYSTEM_PROMPT),
-                ChatMessage::content("user", prompt),
-            ],
+            messages: initial_messages(prompt),
             stream: false,
             tools: None,
             tool_choice: None,
         };
 
-        let response = self
-            .request(&request)
-            .send()
-            .await
-            .context("failed to reach the OpenAI-compatible endpoint")?;
+        let body: ChatResponse = self.send_chat(&request).await?;
 
-        let status = response.status();
-        if !status.is_success() {
-            return Err(http_error(status, response).await);
-        }
-
-        let body: ChatResponse = response
-            .json()
-            .await
-            .context("endpoint returned an invalid chat completion response")?;
-
-        body.choices
-            .into_iter()
-            .next()
-            .and_then(|choice| choice.message.content)
-            .map(|content| content.trim().to_string())
-            .filter(|content| !content.is_empty())
-            .ok_or_else(|| anyhow!("endpoint response did not include assistant content"))
+        extract_content(body)
     }
 
     pub async fn ponder_with_tools(&self, model: &str, prompt: &str) -> Result<String> {
-        let mut messages = vec![
-            ChatMessage::content("system", SYSTEM_PROMPT),
-            ChatMessage::content("user", prompt),
-        ];
+        let mut messages = initial_messages(prompt);
 
         for _ in 0..4 {
             let request = ChatRequest {
@@ -88,21 +63,7 @@ impl ChatClient {
                 tool_choice: Some("auto"),
             };
 
-            let response = self
-                .request(&request)
-                .send()
-                .await
-                .context("failed to reach the OpenAI-compatible endpoint")?;
-
-            let status = response.status();
-            if !status.is_success() {
-                return Err(http_error(status, response).await);
-            }
-
-            let body: ChatResponse = response
-                .json()
-                .await
-                .context("endpoint returned an invalid chat completion response")?;
+            let body: ChatResponse = self.send_chat(&request).await?;
 
             let assistant = body
                 .choices
@@ -111,33 +72,36 @@ impl ChatClient {
                 .map(|choice| choice.message)
                 .ok_or_else(|| anyhow!("endpoint response did not include a choice"))?;
 
-            if let Some(tool_calls) = assistant
-                .tool_calls
-                .clone()
-                .filter(|calls| !calls.is_empty())
-            {
-                messages.push(ChatMessage::assistant_tool_call(&assistant));
+            let AssistantMessage {
+                content,
+                tool_calls,
+            } = assistant;
 
-                for tool_call in tool_calls {
-                    let output = tools::execute(
-                        &self.http,
-                        self.tavily_api_key.as_deref(),
-                        &tool_call.function.name,
-                        tool_call.function.arguments.as_deref().unwrap_or("{}"),
-                    )
-                    .await?;
+            match tool_calls.filter(|calls| !calls.is_empty()) {
+                Some(calls) => {
+                    messages.push(ChatMessage::assistant_tool_call(content.clone(), calls.clone()));
 
-                    messages.push(ChatMessage::tool_result(&tool_call.id, output));
+                    for tool_call in calls {
+                        let output = tools::execute(
+                            &self.http,
+                            self.tavily_api_key.as_deref(),
+                            &tool_call.function.name,
+                            tool_call.function.arguments.as_deref().unwrap_or("{}"),
+                        )
+                        .await?;
+
+                        messages.push(ChatMessage::tool_result(&tool_call.id, output));
+                    }
                 }
-
-                continue;
+                None => {
+                    return content
+                        .map(|c| c.trim().to_string())
+                        .filter(|c| !c.is_empty())
+                        .ok_or_else(|| {
+                            anyhow!("endpoint response did not include assistant content")
+                        });
+                }
             }
-
-            return assistant
-                .content
-                .map(|content| content.trim().to_string())
-                .filter(|content| !content.is_empty())
-                .ok_or_else(|| anyhow!("endpoint response did not include assistant content"));
         }
 
         Err(anyhow!(
@@ -153,25 +117,13 @@ impl ChatClient {
     ) -> Result<()> {
         let request = ChatRequest {
             model,
-            messages: vec![
-                ChatMessage::content("system", SYSTEM_PROMPT),
-                ChatMessage::content("user", prompt),
-            ],
+            messages: initial_messages(prompt),
             stream: true,
             tools: None,
             tool_choice: None,
         };
 
-        let response = self
-            .request(&request)
-            .send()
-            .await
-            .context("failed to reach the OpenAI-compatible endpoint")?;
-
-        let status = response.status();
-        if !status.is_success() {
-            return Err(http_error(status, response).await);
-        }
+        let response = self.send_raw(&request).await?;
 
         let mut buffer = String::new();
         let mut chunks = response.bytes_stream();
@@ -200,18 +152,55 @@ impl ChatClient {
         Ok(())
     }
 
-    fn request<'a>(&self, request: &'a ChatRequest<'a>) -> reqwest::RequestBuilder {
+    async fn send_raw(&self, request: &ChatRequest<'_>) -> Result<reqwest::Response> {
         let builder = self
             .http
             .post(format!("{}/chat/completions", self.base_url))
             .json(request);
 
-        if self.api_key.is_empty() {
+        let builder = if self.api_key.is_empty() {
             builder
         } else {
             builder.bearer_auth(&self.api_key)
+        };
+
+        let response = builder
+            .send()
+            .await
+            .context("failed to reach the OpenAI-compatible endpoint")?;
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(http_error(status, response).await);
         }
+
+        Ok(response)
     }
+
+    async fn send_chat(&self, request: &ChatRequest<'_>) -> Result<ChatResponse> {
+        self.send_raw(request)
+            .await?
+            .json()
+            .await
+            .context("endpoint returned an invalid chat completion response")
+    }
+}
+
+fn initial_messages(prompt: &str) -> Vec<ChatMessage> {
+    vec![
+        ChatMessage::content("system", SYSTEM_PROMPT),
+        ChatMessage::content("user", prompt),
+    ]
+}
+
+fn extract_content(body: ChatResponse) -> Result<String> {
+    body.choices
+        .into_iter()
+        .next()
+        .and_then(|choice| choice.message.content)
+        .map(|content| content.trim().to_string())
+        .filter(|content| !content.is_empty())
+        .ok_or_else(|| anyhow!("endpoint response did not include assistant content"))
 }
 
 fn process_stream_line<W: Write>(line: &str, output: &mut W) -> Result<bool> {
@@ -281,12 +270,12 @@ impl ChatMessage {
         }
     }
 
-    fn assistant_tool_call(message: &AssistantMessage) -> Self {
+    fn assistant_tool_call(content: Option<String>, tool_calls: Vec<ToolCall>) -> Self {
         Self {
             role: "assistant".to_string(),
-            content: message.content.clone(),
+            content,
             tool_call_id: None,
-            tool_calls: message.tool_calls.clone(),
+            tool_calls: Some(tool_calls),
         }
     }
 
