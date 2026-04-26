@@ -1,6 +1,6 @@
 use clap::Parser;
 
-pub const DEFAULT_BASE_URL: &str = "http://192.168.1.40:8787/v1";
+pub const DEFAULT_BASE_URL: &str = "http://localhost:8787/v1";
 pub const DEFAULT_MODEL: &str = "google/gemma-4-e2b";
 
 #[derive(Debug, Parser)]
